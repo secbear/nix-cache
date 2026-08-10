@@ -13,7 +13,11 @@ The repo is intentionally split by control plane:
 - `fly/` owns the app deployment shape
 - `.envrc` provides the optional local bootstrap hook for secret injection
 
-The public read path goes straight to R2. The Fly app only handles uploads, GC, and admin APIs. That keeps the running Fly VM small and cheap. OpenTofu manages only non-secret infrastructure; every real secret is injected through environment variables at runtime.
+The primary public read path goes straight to R2. The Fly app handles uploads, GC, and admin APIs
+and exposes a low-volume read-proxy fallback for edge failures. Consumers list R2 first, so healthy
+reads still bypass the VM and the fallback does not change the normal cost or scaling path. OpenTofu
+manages only non-secret infrastructure; every real secret is injected through environment variables
+at runtime.
 
 ## Why This Shape
 
@@ -266,7 +270,8 @@ jobs:
     uses: ./.github/workflows/niks3-push.yml
     with:
       server-url: https://secbear-cache-niks3.fly.dev
-      substituter-url: https://cache.secbear.dev
+      substituter-url: >-
+        https://cache.secbear.dev https://secbear-cache-niks3.fly.dev
       substituter-public-key: cache.secbear.dev-1:Pbeqskasb4M7FrHn+/kfnv1PCSvF0cJhl1snZ13Jn20=
       installables: |
         .#yourPackage
@@ -284,7 +289,8 @@ jobs:
     uses: SecBear/nix-cache/.github/workflows/niks3-push.yml@<full-commit-sha>
     with:
       server-url: https://secbear-cache-niks3.fly.dev
-      substituter-url: https://cache.secbear.dev
+      substituter-url: >-
+        https://cache.secbear.dev https://secbear-cache-niks3.fly.dev
       substituter-public-key: cache.secbear.dev-1:Pbeqskasb4M7FrHn+/kfnv1PCSvF0cJhl1snZ13Jn20=
       installables: |
         .#yourPackage
@@ -292,9 +298,11 @@ jobs:
 
 ## Operational Notes
 
-- The public cache URL is the R2 custom domain, not the Fly app URL.
+- The primary public cache URL is the R2 custom domain. Consumers also configure the Fly endpoint as
+  a signed, low-volume fallback so a stale or failed Cloudflare edge does not force a source rebuild.
 - The write/admin endpoint is `https://<fly_app_name>.fly.dev`.
-- `niks3` read proxy stays disabled by default to keep Fly cost low.
+- The `niks3` read proxy is enabled for fallback only. Keep the R2 URL first; using Fly as the primary
+  read path would couple downloads to the small write-plane VM and increase bandwidth cost.
 - The Neon project and R2 S3 API credentials are managed outside OpenTofu by design.
 - First app creation on Fly requires billing/payment information on the account.
 - The repo expects provider/admin and runtime secrets to come from the environment.

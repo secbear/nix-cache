@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       substituter-url:
-        description: Public Nix binary-cache URL used before building.
+        description: Space-separated signed Nix binary-cache URLs used before building.
         required: true
         type: string
       substituter-public-key:

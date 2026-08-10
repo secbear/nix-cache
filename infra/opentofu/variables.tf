@@ -124,9 +124,9 @@ variable "niks3_s3_concurrency" {
 }
 
 variable "niks3_enable_read_proxy" {
-  description = "Whether niks3 should proxy reads instead of redirecting clients to R2."
+  description = "Whether the Fly write plane also exposes a low-volume fallback read path."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "oidc_github_subject_patterns" {
