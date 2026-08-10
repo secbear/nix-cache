@@ -1,0 +1,53 @@
+name: Push realized Nix closures to niks3
+description: Push already-built Nix installables with a short-lived GitHub Actions OIDC token.
+inputs:
+  installables:
+    description: Newline-delimited, already-realized Nix installables to push.
+    required: true
+  server-url:
+    description: niks3 write-plane URL.
+    required: true
+  max-concurrent-uploads:
+    description: niks3 client upload concurrency.
+    required: false
+    default: "30"
+  niks3-cli-flake-ref:
+    description: Immutable flake reference that provides the niks3 CLI package.
+    required: false
+    default: github:Mic92/niks3/bb87dcb1b46a1f0c9426b733f4fe325245e386fa#niks3
+runs:
+  using: composite
+  steps:
+    - name: Push already-realized closures
+      shell: bash
+      env:
+        NIKS3_SERVER_URL: ${{ inputs.server-url }}
+        NIKS3_INSTALLABLES: ${{ inputs.installables }}
+        NIKS3_CLI_FLAKE_REF: ${{ inputs.niks3-cli-flake-ref }}
+        NIKS3_MAX_CONCURRENT: ${{ inputs.max-concurrent-uploads }}
+      run: |
+        set -euo pipefail
+
+        mapfile -t installables < <(printf '%s\n' "$NIKS3_INSTALLABLES" | sed '/^[[:space:]]*$/d')
+        if [ "${#installables[@]}" -eq 0 ]; then
+          echo "installables input is empty" >&2
+          exit 1
+        fi
+
+        # Deliberately do not build here. The caller must publish the exact closures that already
+        # passed its release gates on this runner.
+        mapfile -t paths < <(nix path-info "${installables[@]}")
+
+        audience="$(jq -rn --arg value "$NIKS3_SERVER_URL" '$value | @uri')"
+        token="$(curl -fsSL \
+          -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" \
+          | jq -er '.value | select(type == "string" and length > 0)')"
+        echo "::add-mask::${token}"
+
+        nix shell "$NIKS3_CLI_FLAKE_REF" -c \
+          niks3 push \
+            --server-url "$NIKS3_SERVER_URL" \
+            --auth-token "$token" \
+            --max-concurrent-uploads "$NIKS3_MAX_CONCURRENT" \
+            "${paths[@]}"

@@ -205,11 +205,18 @@ This repo currently exposes GC as an on-demand command. It is not scheduled yet.
 
 ## CI Uploads
 
-The reusable workflow is:
+There are two upload surfaces:
 
-- `.github/workflows/niks3-push.yml`
+- `.github/actions/niks3-push/action.yml` pushes already-realized installables from the caller's
+  current runner. Prefer this as the final step of a trusted main CI job: it publishes the exact
+  store that passed the gates and performs no duplicate build.
+- `.github/workflows/niks3-push.yml` is a convenient reusable workflow for callers that do not
+  already have a Nix build runner. It restores from the public cache, builds the requested roots on
+  its own runner, then pushes the closure delta.
 
-It uses GitHub Actions OIDC for authentication — no static secret is needed in calling workflows. The workflow requests an OIDC token with the niks3 write-plane URL as the audience. The server validates the token against the subject patterns configured in `oidc_github_subject_patterns`.
+Both use GitHub Actions OIDC for authentication — no static secret is needed in calling workflows.
+They request an OIDC token with the niks3 write-plane URL as the audience. The server validates the
+token against the subject patterns configured in `oidc_github_subject_patterns`.
 
 The workflow intentionally makes the write-plane URL, public read URL, and signing key explicit
 inputs, so callers do not accidentally target this repo's live infrastructure by default. It reads
@@ -225,6 +232,26 @@ Run this job only after all release gates pass on a trusted branch. Pull request
 public cache read-only and must never receive cache-write authority.
 
 > **Note:** `id-token: write` permission is required, which means fork pull requests cannot push to the cache. This is intentional.
+
+Same-run publisher example:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+
+steps:
+  - uses: SecBear/nix-cache/.github/actions/niks3-push@<full-commit-sha>
+    with:
+      server-url: https://secbear-cache-niks3.fly.dev
+      installables: |
+        .#yourAlreadyBuiltPackage
+```
+
+The publishing job must not run pull-request code. Use a distinct main-only job or reusable-workflow
+caller rather than granting `id-token: write` to a PR job and relying on a conditional upload step.
+
+Reusable-workflow example:
 
 Minimal caller example from this repo:
 
