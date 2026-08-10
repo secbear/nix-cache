@@ -130,7 +130,11 @@ variable "niks3_enable_read_proxy" {
 }
 
 variable "oidc_github_subject_patterns" {
-  description = "GitHub Actions OIDC subject patterns allowed to push. Example: [\"repo:MyOrg/*:*\"]. Empty list disables GitHub OIDC."
+  description = "Exact GitHub Actions OIDC subjects allowed to administer the cache. Use trusted main refs; do not use owner/repository wildcards."
   type        = list(string)
-  default     = []
+
+  validation {
+    condition     = length(var.oidc_github_subject_patterns) > 0
+    error_message = "oidc_github_subject_patterns must contain at least one exact trusted subject."
+  }
 }

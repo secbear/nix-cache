@@ -190,18 +190,20 @@ Use:
 just gc
 ```
 
-That uses the upstream `niks3 gc` defaults:
+By default, the wrapper preserves completed closures for 100 years (effectively indefinitely) and
+only removes abandoned upload records:
 
-- `--older-than 720h` (30 days)
+- `--older-than 876000h` (100 years)
 - `--failed-uploads-older-than 6h`
 
 Override them when needed:
 
 ```sh
-nix run .#gc -- --older-than 168h --failed-uploads-older-than 12h
+nix run .#gc -- --older-than 720h --failed-uploads-older-than 12h
 ```
 
-This repo currently exposes GC as an on-demand command. It is not scheduled yet.
+This repo currently exposes GC as an on-demand command. It is not scheduled yet. Do not introduce
+age-based completed-closure deletion until the server supports and uses explicit release-root pins.
 
 ## CI Uploads
 
@@ -291,6 +293,14 @@ jobs:
 - First app creation on Fly requires billing/payment information on the account.
 - The repo expects provider/admin and runtime secrets to come from the environment.
 - The repo uses OpenTofu-compatible HCL. Plain Terraform users can adapt it, but the command surface is built around `tofu`.
+- `niks3` v1.4.0 is pinned by both source revision and multi-architecture image digest. Upgrade to
+  v1.8.0 before the paid release, but snapshot Neon and verify its database migration plus upload,
+  read, signing, retry, and GC behavior before deploying it.
+- OIDC subjects are cache-administrator authority because accepted uploads are signed. The deployed
+  policy must be the exact trusted Attune main ref; owner-wide or repository-wide wildcards are not
+  acceptable. The tracked example encodes that fail-closed shape.
+- Keep an offline backup of the signing key. R2 data is reproducible; signing-key compromise requires
+  key rotation, cache purge, and consumer key replacement.
 
 ## Current Limits
 

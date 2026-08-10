@@ -18,5 +18,5 @@
   "fly_swap_size_mb": 512,
   "niks3_s3_concurrency": 20,
   "niks3_enable_read_proxy": false,
-  "oidc_github_subject_patterns": ["repo:replace-with-your-github-owner/*:*"]
+  "oidc_github_subject_patterns": ["repo:replace-with-your-github-owner/replace-with-your-repository:ref:refs/heads/main"]
 }

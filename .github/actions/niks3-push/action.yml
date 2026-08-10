@@ -56,9 +56,14 @@ runs:
           | jq -er '.value | select(type == "string" and length > 0)')"
         echo "::add-mask::${token}"
 
-        nix shell "$NIKS3_CLI_FLAKE_REF" -c \
+        umask 077
+        token_file="$(mktemp "${RUNNER_TEMP:-/tmp}/niks3-auth-token.XXXXXX")"
+        trap 'rm -f -- "$token_file"' EXIT
+        printf '%s' "$token" >"$token_file"
+        unset token
+
+        NIKS3_AUTH_TOKEN_FILE="$token_file" nix shell "$NIKS3_CLI_FLAKE_REF" -c \
           niks3 push \
             --server-url "$NIKS3_SERVER_URL" \
-            --auth-token "$token" \
             --max-concurrent-uploads "$NIKS3_MAX_CONCURRENT" \
             "${paths[@]}"
