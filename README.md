@@ -14,10 +14,11 @@ The repo is intentionally split by control plane:
 - `.envrc` provides the optional local bootstrap hook for secret injection
 
 The primary public read path goes straight to R2. The Fly app handles uploads, GC, and admin APIs
-and exposes a low-volume read-proxy fallback for edge failures. Consumers list R2 first, so healthy
-reads still bypass the VM and the fallback does not change the normal cost or scaling path. OpenTofu
-manages only non-secret infrastructure; every real secret is injected through environment variables
-at runtime.
+and exposes a secondary read proxy. Consumers list R2 first, so successful R2 hits—including NAR
+bodies—bypass the VM. Nix does probe the secondary cache after an ordinary primary miss, however, so
+the Fly service and authenticated R2 API receive miss lookups as well as genuine edge-failure
+fallback traffic. OpenTofu manages only non-secret infrastructure; every real secret is injected
+through environment variables at runtime.
 
 ## Why This Shape
 
@@ -299,10 +300,11 @@ jobs:
 ## Operational Notes
 
 - The primary public cache URL is the R2 custom domain. Consumers also configure the Fly endpoint as
-  a signed, low-volume fallback so a stale or failed Cloudflare edge does not force a source rebuild.
+  a signed secondary path so a stale or failed Cloudflare edge does not force a source rebuild.
 - The write/admin endpoint is `https://<fly_app_name>.fly.dev`.
-- The `niks3` read proxy is enabled for fallback only. Keep the R2 URL first; using Fly as the primary
-  read path would couple downloads to the small write-plane VM and increase bandwidth cost.
+- Keep the R2 URL first. Successful R2 hits never reach Fly, but every R2 miss is subsequently probed
+  through the read proxy; monitor that request load and remove the secondary after the Cloudflare
+  status policy has proven reliable if the duplicate miss traffic becomes material.
 - The Neon project and R2 S3 API credentials are managed outside OpenTofu by design.
 - First app creation on Fly requires billing/payment information on the account.
 - The repo expects provider/admin and runtime secrets to come from the environment.
