@@ -10,7 +10,7 @@
     let
       mkProjectScript = import ../lib/mk-project-script.nix { inherit pkgs; };
 
-      niks3Image = "ghcr.io/mic92/niks3:v1.4.0";
+      niks3Image = "ghcr.io/mic92/niks3:v1.4.0@sha256:fcbeef12785af2048250022a02e6830efe67dcc26eeb765ce87a0a93a7a28449";
       niks3Cli = inputs.niks3.packages.${system}.niks3;
       tfDir = "infra/opentofu";
       tfVarsFile = "infra/opentofu/stack.auto.tfvars.json";
@@ -281,6 +281,7 @@
         gc = mkProjectScript {
           name = "gc";
           runtimeInputs = [
+            pkgs.coreutils
             pkgs.jq
             niks3Cli
           ];
@@ -302,9 +303,16 @@
             app_name="$(jq -r '.fly_app_name' ${tfVarsFile})"
             server_url="''${NIKS3_SERVER_URL:-https://$app_name.fly.dev}"
 
-            exec ${niks3Cli}/bin/niks3 gc \
+            umask 077
+            token_file="$(mktemp "''${TMPDIR:-/tmp}/niks3-auth-token.XXXXXX")"
+            trap 'rm -f -- "$token_file"' EXIT
+            printf '%s' "$NIKS3_API_TOKEN" >"$token_file"
+            unset NIKS3_API_TOKEN
+
+            NIKS3_AUTH_TOKEN_FILE="$token_file" ${niks3Cli}/bin/niks3 gc \
               --server-url "$server_url" \
-              --auth-token "$NIKS3_API_TOKEN" \
+              --older-than 876000h \
+              --failed-uploads-older-than 6h \
               "$@"
           '';
         };

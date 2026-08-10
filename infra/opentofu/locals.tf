@@ -13,9 +13,8 @@ locals {
     : "${var.cloudflare_account_id}.${var.r2_jurisdiction}.r2.cloudflarestorage.com"
   )
 
-  # OIDC config written to the Fly guest via [[files]].
-  # When no subject patterns are configured the providers map is empty, which
-  # effectively disables OIDC while keeping the [[files]] stanza unconditional.
+  # OIDC config written to the Fly guest via [[files]]. Deploy requires at least one exact trusted
+  # subject; current niks3 rejects an empty provider set rather than treating it as disabled.
   oidc_config_json = jsonencode({
     providers = length(var.oidc_github_subject_patterns) == 0 ? {} : {
       github = {

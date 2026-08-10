@@ -1,0 +1,33 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/determinate-nix-action@61cbfe2efc2d4e7a8a6d56967c3c1058e846c858 # v3.21.9
+        with:
+          extra-conf: |
+            extra-substituters = https://cache.secbear.dev https://secbear-cache-niks3.fly.dev
+            extra-trusted-public-keys = cache.secbear.dev-1:Pbeqskasb4M7FrHn+/kfnv1PCSvF0cJhl1snZ13Jn20=
+            fallback = true
+            connect-timeout = 5
+            stalled-download-timeout = 15
+            require-sigs = true
+      - name: Evaluate every declared system
+        run: nix flake check --all-systems --no-build
+      - name: Format and statically validate repository files
+        run: nix build .#checks.x86_64-linux.treefmt --no-link --print-build-logs

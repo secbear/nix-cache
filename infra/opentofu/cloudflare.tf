@@ -18,8 +18,10 @@ resource "cloudflare_r2_custom_domain" "cache" {
 
 # Edge-cache the binary cache. Cloudflare does NOT cache .narinfo/.nar.zst by default (non-standard
 # extensions -> cf-cache-status: DYNAMIC/MISS on every pull, ~275KB/s from R2 origin). NARs and
-# narinfos are content-addressed and effectively immutable, so cache hits for 7 days; 404s (every
-# narinfo probe for a path not yet pushed) only for 60s so a fresh push isn't masked by a cached miss.
+# narinfos are content-addressed and effectively immutable, so successful responses cache for 7
+# days; 404s (every narinfo probe for a path not yet pushed) only for 60s so a fresh push isn't masked
+# by a cached miss. Every other response is no-store: a transient auth, throttling, or server failure
+# must never become a week-long edge outage.
 resource "cloudflare_ruleset" "cache_edge" {
   zone_id = var.cloudflare_zone_id
   name    = "niks3 edge caching"
@@ -35,11 +37,52 @@ resource "cloudflare_ruleset" "cache_edge" {
       cache = true
       edge_ttl = {
         mode    = "override_origin"
-        default = 604800 # 7d: store paths are content-addressed, safe to pin
-        status_code_ttl = [{
-          status_code = 404
-          value       = 60
-        }]
+        default = 604800 # unmatched successful/redirect responses retain the immutable-object TTL
+        status_code_ttl = [
+          {
+            status_code_range = {
+              from = 100
+              to   = 199
+            }
+            value = -1
+          },
+          {
+            status_code_range = {
+              from = 200
+              to   = 299
+            }
+            value = 604800
+          },
+          {
+            status_code_range = {
+              from = 300
+              to   = 303
+            }
+            value = -1
+          },
+          {
+            status_code = 304
+            value       = 604800
+          },
+          {
+            status_code_range = {
+              from = 305
+              to   = 403
+            }
+            value = -1
+          },
+          {
+            status_code = 404
+            value       = 60
+          },
+          {
+            status_code_range = {
+              from = 405
+              to   = 999
+            }
+            value = -1
+          },
+        ]
       }
     }
   }]

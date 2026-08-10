@@ -1,0 +1,75 @@
+name: Push realized Nix closures to niks3
+description: Push already-built Nix installables with a short-lived GitHub Actions OIDC token.
+inputs:
+  installables:
+    description: Newline-delimited, already-realized Nix installables to push.
+    required: true
+  server-url:
+    description: niks3 write-plane URL.
+    required: true
+  max-concurrent-uploads:
+    description: niks3 client upload concurrency.
+    required: false
+    default: "30"
+  niks3-cli-flake-ref:
+    description: Immutable flake reference that provides the niks3 CLI package.
+    required: false
+    default: github:Mic92/niks3/bb87dcb1b46a1f0c9426b733f4fe325245e386fa#niks3
+runs:
+  using: composite
+  steps:
+    - name: Push already-realized closures
+      shell: bash
+      env:
+        NIKS3_SERVER_URL: ${{ inputs.server-url }}
+        NIKS3_INSTALLABLES: ${{ inputs.installables }}
+        NIKS3_CLI_FLAKE_REF: ${{ inputs.niks3-cli-flake-ref }}
+        NIKS3_MAX_CONCURRENT: ${{ inputs.max-concurrent-uploads }}
+      run: |
+        set -euo pipefail
+
+        mapfile -t installables < <(printf '%s\n' "$NIKS3_INSTALLABLES" | sed '/^[[:space:]]*$/d')
+        if [ "${#installables[@]}" -eq 0 ]; then
+          echo "installables input is empty" >&2
+          exit 1
+        fi
+
+        # Deliberately do not build here. The caller must publish the exact closures that already
+        # passed its release gates on this runner.
+        paths_output="$(nix path-info "${installables[@]}")"
+        mapfile -t paths <<<"$paths_output"
+        if [ "${#paths[@]}" -ne "${#installables[@]}" ]; then
+          echo "resolved ${#paths[@]} store paths for ${#installables[@]} installables" >&2
+          exit 1
+        fi
+        for path in "${paths[@]}"; do
+          if [[ "$path" != /nix/store/* ]]; then
+            echo "nix path-info returned an invalid store path: $path" >&2
+            exit 1
+          fi
+        done
+
+        # Realize and validate the pinned client before minting the short-lived OIDC token.
+        niks3_cli_path="$(nix build "$NIKS3_CLI_FLAKE_REF" --no-link --print-out-paths)"
+        if [[ "$niks3_cli_path" != /nix/store/* ]] || [ ! -x "$niks3_cli_path/bin/niks3" ]; then
+          echo "niks3 CLI did not resolve to one executable store path: $niks3_cli_path" >&2
+          exit 1
+        fi
+
+        audience="$(jq -rn --arg value "$NIKS3_SERVER_URL" '$value | @uri')"
+        token="$(curl -fsSL \
+          -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" \
+          | jq -er '.value | select(type == "string" and length > 0)')"
+        echo "::add-mask::${token}"
+
+        umask 077
+        token_file="$(mktemp "${RUNNER_TEMP:-/tmp}/niks3-auth-token.XXXXXX")"
+        trap 'rm -f -- "$token_file"' EXIT
+        printf '%s' "$token" >"$token_file"
+        unset token
+
+        NIKS3_AUTH_TOKEN_FILE="$token_file" "$niks3_cli_path/bin/niks3" push \
+            --server-url "$NIKS3_SERVER_URL" \
+            --max-concurrent-uploads "$NIKS3_MAX_CONCURRENT" \
+            "${paths[@]}"

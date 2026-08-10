@@ -13,7 +13,12 @@ The repo is intentionally split by control plane:
 - `fly/` owns the app deployment shape
 - `.envrc` provides the optional local bootstrap hook for secret injection
 
-The public read path goes straight to R2. The Fly app only handles uploads, GC, and admin APIs. That keeps the running Fly VM small and cheap. OpenTofu manages only non-secret infrastructure; every real secret is injected through environment variables at runtime.
+The primary public read path goes straight to R2. The Fly app handles uploads, GC, and admin APIs
+and exposes a secondary read proxy. Consumers list R2 first, so successful R2 hits—including NAR
+bodies—bypass the VM. Nix does probe the secondary cache after an ordinary primary miss, however, so
+the Fly service and authenticated R2 API receive miss lookups as well as genuine edge-failure
+fallback traffic. OpenTofu manages only non-secret infrastructure; every real secret is injected
+through environment variables at runtime.
 
 ## Why This Shape
 
@@ -102,7 +107,10 @@ Useful follow-up commands:
 - `just status`
 - `just down`
 
-This repo ships a repo-managed pre-commit hook under `.githooks/pre-commit` for `fmt`, `lint`, and `nix flake check --no-build`. Clones must opt in with `git config core.hooksPath .githooks`.
+This repo ships a repo-managed pre-commit hook under `.githooks/pre-commit` for `fmt`, `lint`, and
+`nix flake check --no-build`. Clones must opt in with `git config core.hooksPath .githooks`. One
+small GitHub Actions job independently evaluates every flake system and builds the Linux treefmt
+check; it does not build or deploy the infrastructure.
 
 ## Secret Model
 
@@ -187,39 +195,85 @@ Use:
 just gc
 ```
 
-That uses the upstream `niks3 gc` defaults:
+By default, the wrapper preserves completed closures for 100 years (effectively indefinitely) and
+only removes abandoned upload records:
 
-- `--older-than 720h` (30 days)
+- `--older-than 876000h` (100 years)
 - `--failed-uploads-older-than 6h`
 
 Override them when needed:
 
 ```sh
-nix run .#gc -- --older-than 168h --failed-uploads-older-than 12h
+nix run .#gc -- --older-than 720h --failed-uploads-older-than 12h
 ```
 
-This repo currently exposes GC as an on-demand command. It is not scheduled yet.
+This repo currently exposes GC as an on-demand command. It is not scheduled yet. Do not introduce
+age-based completed-closure deletion until the server supports and uses explicit release-root pins.
 
 ## CI Uploads
 
-The reusable workflow is:
+There are two upload surfaces:
 
-- `.github/workflows/niks3-push.yml`
+- `.github/actions/niks3-push/action.yml` pushes already-realized installables from the caller's
+  current runner. Prefer this as the final step of a trusted main CI job: it publishes the exact
+  store that passed the gates and performs no duplicate build.
+- `.github/workflows/niks3-push.yml` is a convenient reusable workflow for callers that do not
+  already have a Nix build runner. It restores from the public cache, builds the requested roots on
+  its own runner, then pushes the closure delta.
 
-It uses GitHub Actions OIDC for authentication — no static secret is needed in calling workflows. The workflow requests an OIDC token with the niks3 write-plane URL as the audience. The server validates the token against the subject patterns configured in `oidc_github_subject_patterns`.
+Both use GitHub Actions OIDC for authentication — no static secret is needed in calling workflows.
+They request an OIDC token with the niks3 write-plane URL as the audience. The server validates the
+token against the subject patterns configured in `oidc_github_subject_patterns`.
 
-The workflow intentionally makes both the write-plane URL and the `niks3` CLI flake reference explicit inputs, so callers do not accidentally target this repo's live infrastructure by default. The default CLI ref is pinned to the same upstream `niks3` version this repo currently tracks.
+The workflow intentionally makes the write-plane URL, public read URL, and signing key explicit
+inputs, so callers do not accidentally target this repo's live infrastructure by default. It reads
+from that cache before building, then uploads only the missing closure delta. The default CLI ref is
+an immutable upstream commit matching the `niks3` version this repo currently tracks.
+
+`niks3 push` recursively discovers each requested installable's full Nix closure, so callers should
+list only their expensive roots (for example the dev shell, dependency-only derivations, and final
+container). Store paths, NARs, narinfos, build logs, and realisations in those closures are uploaded
+transactionally; listing every transitive dependency is unnecessary.
+
+Run this job only after all release gates pass on a trusted branch. Pull requests should consume the
+public cache read-only and must never receive cache-write authority.
 
 > **Note:** `id-token: write` permission is required, which means fork pull requests cannot push to the cache. This is intentional.
+
+Same-run publisher example:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+
+steps:
+  - uses: SecBear/nix-cache/.github/actions/niks3-push@<full-commit-sha>
+    with:
+      server-url: https://secbear-cache-niks3.fly.dev
+      installables: |
+        .#yourAlreadyBuiltPackage
+```
+
+The publishing job must not run pull-request code. Use a distinct main-only job or reusable-workflow
+caller rather than granting `id-token: write` to a PR job and relying on a conditional upload step.
+
+Reusable-workflow example:
 
 Minimal caller example from this repo:
 
 ```yaml
 jobs:
   cache:
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/niks3-push.yml
     with:
       server-url: https://secbear-cache-niks3.fly.dev
+      substituter-url: >-
+        https://cache.secbear.dev https://secbear-cache-niks3.fly.dev
+      substituter-public-key: cache.secbear.dev-1:Pbeqskasb4M7FrHn+/kfnv1PCSvF0cJhl1snZ13Jn20=
       installables: |
         .#yourPackage
         .#yourOtherPackage
@@ -230,22 +284,39 @@ Example from another repository:
 ```yaml
 jobs:
   cache:
-    uses: SecBear/nix-cache/.github/workflows/niks3-push.yml@main
+    permissions:
+      contents: read
+      id-token: write
+    uses: SecBear/nix-cache/.github/workflows/niks3-push.yml@<full-commit-sha>
     with:
       server-url: https://secbear-cache-niks3.fly.dev
+      substituter-url: >-
+        https://cache.secbear.dev https://secbear-cache-niks3.fly.dev
+      substituter-public-key: cache.secbear.dev-1:Pbeqskasb4M7FrHn+/kfnv1PCSvF0cJhl1snZ13Jn20=
       installables: |
         .#yourPackage
 ```
 
 ## Operational Notes
 
-- The public cache URL is the R2 custom domain, not the Fly app URL.
+- The primary public cache URL is the R2 custom domain. Consumers also configure the Fly endpoint as
+  a signed secondary path so a stale or failed Cloudflare edge does not force a source rebuild.
 - The write/admin endpoint is `https://<fly_app_name>.fly.dev`.
-- `niks3` read proxy stays disabled by default to keep Fly cost low.
+- Keep the R2 URL first. Successful R2 hits never reach Fly, but every R2 miss is subsequently probed
+  through the read proxy; monitor that request load and remove the secondary after the Cloudflare
+  status policy has proven reliable if the duplicate miss traffic becomes material.
 - The Neon project and R2 S3 API credentials are managed outside OpenTofu by design.
 - First app creation on Fly requires billing/payment information on the account.
 - The repo expects provider/admin and runtime secrets to come from the environment.
 - The repo uses OpenTofu-compatible HCL. Plain Terraform users can adapt it, but the command surface is built around `tofu`.
+- `niks3` v1.4.0 is pinned by both source revision and multi-architecture image digest. Upgrade to
+  v1.8.0 before the paid release, but snapshot Neon and verify its database migration plus upload,
+  read, signing, retry, and GC behavior before deploying it.
+- OIDC subjects are cache-administrator authority because accepted uploads are signed. The deployed
+  policy must be the exact trusted Attune main ref; owner-wide or repository-wide wildcards are not
+  acceptable. The tracked example encodes that fail-closed shape.
+- Keep an offline backup of the signing key. R2 data is reproducible; signing-key compromise requires
+  key rotation, cache purge, and consumer key replacement.
 
 ## Current Limits
 
