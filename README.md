@@ -102,7 +102,10 @@ Useful follow-up commands:
 - `just status`
 - `just down`
 
-This repo ships a repo-managed pre-commit hook under `.githooks/pre-commit` for `fmt`, `lint`, and `nix flake check --no-build`. Clones must opt in with `git config core.hooksPath .githooks`.
+This repo ships a repo-managed pre-commit hook under `.githooks/pre-commit` for `fmt`, `lint`, and
+`nix flake check --no-build`. Clones must opt in with `git config core.hooksPath .githooks`. One
+small GitHub Actions job independently evaluates every flake system and builds the Linux treefmt
+check; it does not build or deploy the infrastructure.
 
 ## Secret Model
 
@@ -208,7 +211,18 @@ The reusable workflow is:
 
 It uses GitHub Actions OIDC for authentication — no static secret is needed in calling workflows. The workflow requests an OIDC token with the niks3 write-plane URL as the audience. The server validates the token against the subject patterns configured in `oidc_github_subject_patterns`.
 
-The workflow intentionally makes both the write-plane URL and the `niks3` CLI flake reference explicit inputs, so callers do not accidentally target this repo's live infrastructure by default. The default CLI ref is pinned to the same upstream `niks3` version this repo currently tracks.
+The workflow intentionally makes the write-plane URL, public read URL, and signing key explicit
+inputs, so callers do not accidentally target this repo's live infrastructure by default. It reads
+from that cache before building, then uploads only the missing closure delta. The default CLI ref is
+an immutable upstream commit matching the `niks3` version this repo currently tracks.
+
+`niks3 push` recursively discovers each requested installable's full Nix closure, so callers should
+list only their expensive roots (for example the dev shell, dependency-only derivations, and final
+container). Store paths, NARs, narinfos, build logs, and realisations in those closures are uploaded
+transactionally; listing every transitive dependency is unnecessary.
+
+Run this job only after all release gates pass on a trusted branch. Pull requests should consume the
+public cache read-only and must never receive cache-write authority.
 
 > **Note:** `id-token: write` permission is required, which means fork pull requests cannot push to the cache. This is intentional.
 
@@ -220,6 +234,8 @@ jobs:
     uses: ./.github/workflows/niks3-push.yml
     with:
       server-url: https://secbear-cache-niks3.fly.dev
+      substituter-url: https://cache.secbear.dev
+      substituter-public-key: cache.secbear.dev-1:Pbeqskasb4M7FrHn+/kfnv1PCSvF0cJhl1snZ13Jn20=
       installables: |
         .#yourPackage
         .#yourOtherPackage
@@ -230,9 +246,11 @@ Example from another repository:
 ```yaml
 jobs:
   cache:
-    uses: SecBear/nix-cache/.github/workflows/niks3-push.yml@main
+    uses: SecBear/nix-cache/.github/workflows/niks3-push.yml@<full-commit-sha>
     with:
       server-url: https://secbear-cache-niks3.fly.dev
+      substituter-url: https://cache.secbear.dev
+      substituter-public-key: cache.secbear.dev-1:Pbeqskasb4M7FrHn+/kfnv1PCSvF0cJhl1snZ13Jn20=
       installables: |
         .#yourPackage
 ```
