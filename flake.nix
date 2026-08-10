@@ -15,7 +15,7 @@
     };
 
     niks3 = {
-      url = "github:Mic92/niks3/v1.4.0";
+      url = "github:Mic92/niks3/v1.8.0";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-parts.follows = "flake-parts";
       inputs.treefmt-nix.follows = "treefmt-nix";
