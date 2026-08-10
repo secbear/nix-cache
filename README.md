@@ -260,6 +260,9 @@ Minimal caller example from this repo:
 ```yaml
 jobs:
   cache:
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/niks3-push.yml
     with:
       server-url: https://secbear-cache-niks3.fly.dev
@@ -275,6 +278,9 @@ Example from another repository:
 ```yaml
 jobs:
   cache:
+    permissions:
+      contents: read
+      id-token: write
     uses: SecBear/nix-cache/.github/workflows/niks3-push.yml@<full-commit-sha>
     with:
       server-url: https://secbear-cache-niks3.fly.dev

@@ -68,6 +68,18 @@ jobs:
           fi
 
           nix build --no-link --print-build-logs "${installables[@]}"
+      - name: Realize the pinned niks3 client before minting a token
+        id: cli
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cli_path="$(nix build "$NIKS3_CLI_FLAKE_REF" --no-link --print-out-paths)"
+          if [[ "$cli_path" != /nix/store/* ]] || [ ! -x "$cli_path/bin/niks3" ]; then
+            echo "niks3 CLI did not resolve to one executable store path: $cli_path" >&2
+            exit 1
+          fi
+          echo "path=${cli_path}" >> "$GITHUB_OUTPUT"
       - name: Fetch OIDC token
         id: oidc
         shell: bash
@@ -89,9 +101,15 @@ jobs:
         shell: bash
         env:
           NIKS3_AUTH_TOKEN_FILE: ${{ steps.oidc.outputs.token-file }}
+          NIKS3_CLI_PATH: ${{ steps.cli.outputs.path }}
         run: |
           set -euo pipefail
           trap 'rm -f -- "$NIKS3_AUTH_TOKEN_FILE"' EXIT
+
+          if [[ "$NIKS3_CLI_PATH" != /nix/store/* ]] || [ ! -x "$NIKS3_CLI_PATH/bin/niks3" ]; then
+            echo "niks3 CLI is missing or invalid: $NIKS3_CLI_PATH" >&2
+            exit 1
+          fi
 
           mapfile -t installables < <(printf '%s\n' "$NIKS3_INSTALLABLES" | sed '/^[[:space:]]*$/d')
           paths_output="$(nix path-info "${installables[@]}")"
@@ -107,8 +125,7 @@ jobs:
             fi
           done
 
-          nix shell "$NIKS3_CLI_FLAKE_REF" -c \
-            niks3 push \
+          "$NIKS3_CLI_PATH/bin/niks3" push \
               --server-url "$NIKS3_SERVER_URL" \
               --max-concurrent-uploads "$NIKS3_MAX_CONCURRENT" \
               "${paths[@]}"

@@ -49,6 +49,13 @@ runs:
           fi
         done
 
+        # Realize and validate the pinned client before minting the short-lived OIDC token.
+        niks3_cli_path="$(nix build "$NIKS3_CLI_FLAKE_REF" --no-link --print-out-paths)"
+        if [[ "$niks3_cli_path" != /nix/store/* ]] || [ ! -x "$niks3_cli_path/bin/niks3" ]; then
+          echo "niks3 CLI did not resolve to one executable store path: $niks3_cli_path" >&2
+          exit 1
+        fi
+
         audience="$(jq -rn --arg value "$NIKS3_SERVER_URL" '$value | @uri')"
         token="$(curl -fsSL \
           -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -62,8 +69,7 @@ runs:
         printf '%s' "$token" >"$token_file"
         unset token
 
-        NIKS3_AUTH_TOKEN_FILE="$token_file" nix shell "$NIKS3_CLI_FLAKE_REF" -c \
-          niks3 push \
+        NIKS3_AUTH_TOKEN_FILE="$token_file" "$niks3_cli_path/bin/niks3" push \
             --server-url "$NIKS3_SERVER_URL" \
             --max-concurrent-uploads "$NIKS3_MAX_CONCURRENT" \
             "${paths[@]}"
